@@ -153,6 +153,9 @@ func build(cfg config.SMTP, msg Message) ([]byte, error) {
 	header("Subject", mime.QEncoding.Encode("utf-8", msg.Subject))
 	header("Date", time.Now().Format(time.RFC1123Z))
 	header("Message-ID", fmt.Sprintf("<%s@%s>", randomHex(16), domain))
+	// Marks the message as automated: no out-of-office replies to it.
+	header("Auto-Submitted", "auto-generated")
+	header("X-Auto-Response-Suppress", "All")
 	header("MIME-Version", "1.0")
 	header("Content-Type", fmt.Sprintf(`multipart/alternative; boundary="%s"`, boundary))
 	b.WriteString("\r\n")

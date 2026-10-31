@@ -9,7 +9,6 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/degovan/degoploy/internal/audit"
 	"github.com/degovan/degoploy/internal/auth"
@@ -215,17 +214,24 @@ func (a *API) testEmail(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusConflict, "email_not_configured", "set the SMTP host, port and from address first")
 		return
 	}
+	host := hostOf(a.publicURL(r))
 	reply, err := mailer.Send(r.Context(), s, mailer.Message{
 		To:      to,
-		Subject: "degoploy test email",
-		Text: fmt.Sprintf("This is a test email from degoploy, sent by %s.\n\n"+
-			"It arrived, so invitations can be emailed with these settings:\n%s:%d (%s), from %s.\n",
-			ident.User.Username, s.Host, s.Port, s.Encryption, s.FromAddress),
-		HTML: emailHTML("Test email",
-			fmt.Sprintf("This is a test email from degoploy, sent by <b>%s</b>.", html.EscapeString(ident.User.Username)),
-			fmt.Sprintf("It arrived, so invitations can be emailed with these settings: %s:%d (%s), from %s.",
+		Subject: "degoploy test email from " + host,
+		Text: fmt.Sprintf("This is a test email from degoploy at %s, sent by %s.\n\n"+
+			"It arrived, so invitations can be emailed with these settings:\n%s:%d (%s), from %s.\n\n"+
+			"-- \nYou received this because %s sent a test email to %s from the Email page.\n",
+			host, ident.User.Username, s.Host, s.Port, s.Encryption, s.FromAddress, ident.User.Username, to),
+		HTML: emailHTML(emailLayout{
+			Preview: "Email from degoploy works with these settings.",
+			Title:   "Test email",
+			Lead: fmt.Sprintf("This is a test email from degoploy at %s, sent by <b>%s</b>.",
+				html.EscapeString(host), html.EscapeString(ident.User.Username)),
+			Note: fmt.Sprintf("It arrived, so invitations can be emailed with these settings: %s:%d (%s), from %s.",
 				html.EscapeString(s.Host), s.Port, html.EscapeString(s.Encryption), html.EscapeString(s.FromAddress)),
-			"", ""),
+			Footer: fmt.Sprintf("You received this because %s sent a test email to %s from the Email page.",
+				html.EscapeString(ident.User.Username), html.EscapeString(to)),
+		}),
 	})
 	t := &store.EmailTest{Recipient: to, OK: err == nil, Detail: reply, SettingsMAC: a.smtpMAC(s), SentBy: &ident.User.ID}
 	if err != nil {
@@ -243,19 +249,39 @@ func (a *API) testEmail(w http.ResponseWriter, r *http.Request) {
 }
 
 // sendInvite emails an invitation link; the returned string is the error, if any.
-func (a *API) sendInvite(r *http.Request, s config.SMTP, inviter string, inv *store.Invite, token string) string {
-	link := a.publicURL(r) + "/invite/" + url.PathEscape(token)
+func (a *API) sendInvite(r *http.Request, s config.SMTP, inviter *store.User, inv *store.Invite, token string) string {
+	base := a.publicURL(r)
+	host := hostOf(base)
+	link := base + "/invite/" + url.PathEscape(token)
 	role := strings.ToUpper(string(inv.Role[:1])) + string(inv.Role[1:])
 	expires := inv.ExpiresAt.UTC().Format("2 January 2006")
+	// Naming the inviter with their address lets the recipient tell a real
+	// invitation from a lookalike.
+	who := inviterName(inviter)
+	if inviter.Email != "" {
+		who += " (" + inviter.Email + ")"
+	}
 	_, err := mailer.Send(r.Context(), s, mailer.Message{
 		To:      inv.Email,
-		Subject: fmt.Sprintf("%s invited you to degoploy", inviter),
-		Text: fmt.Sprintf("%s invited you to degoploy as %s.\n\nChoose a username and password here:\n%s\n\n"+
-			"The link works once and expires on %s (UTC).\n", inviter, role, link, expires),
-		HTML: emailHTML("You're invited",
-			fmt.Sprintf("<b>%s</b> invited you to degoploy as <b>%s</b>.", html.EscapeString(inviter), role),
-			fmt.Sprintf("The link works once and expires on %s (UTC).", expires),
-			link, "Accept invitation"),
+		Subject: fmt.Sprintf("%s invited you to degoploy on %s", inviterName(inviter), host),
+		Text: fmt.Sprintf("Hi,\n\n%s invited you to degoploy on %s as %s. degoploy is where your team "+
+			"deploys its projects from Git.\n\nTo join, open this link and choose a username and password:\n%s\n\n"+
+			"The link works once and expires on %s (UTC).\n\n"+
+			"-- \nYou received this because %s invited %s. If you were not expecting it, "+
+			"ignore this email: no account is created until the link is used.\n",
+			who, host, role, link, expires, who, inv.Email),
+		HTML: emailHTML(emailLayout{
+			Preview: fmt.Sprintf("Join degoploy on %s as %s. The link expires on %s.", host, role, expires),
+			Title:   "Join degoploy on " + host,
+			Lead: fmt.Sprintf("<b>%s</b> invited you to degoploy on %s as <b>%s</b>. degoploy is where your team "+
+				"deploys its projects from Git.", html.EscapeString(who), html.EscapeString(host), role),
+			Note:      fmt.Sprintf("The link works once and expires on %s (UTC).", expires),
+			ButtonURL: link,
+			Button:    "Set up your account",
+			Footer: fmt.Sprintf("You received this because %s invited %s. If you were not expecting it, "+
+				"ignore this email: no account is created until the link is used.",
+				html.EscapeString(who), html.EscapeString(inv.Email)),
+		}),
 	})
 	if err != nil {
 		return err.Error()
@@ -281,21 +307,41 @@ func (a *API) publicURL(r *http.Request) string {
 	return scheme + "://" + r.Host
 }
 
-// emailHTML is the shared layout of degoploy emails. button may be empty.
-func emailHTML(title, lead, note, buttonURL, button string) string {
-	var cta string
-	if buttonURL != "" {
-		u := html.EscapeString(buttonURL)
-		cta = fmt.Sprintf(`<p style="margin:24px 0"><a href="%s" style="background:#111;color:#fff;padding:10px 16px;`+
-			`border-radius:6px;text-decoration:none;font-weight:500">%s</a></p>`+
-			`<p style="color:#666;font-size:13px">Or open this link: <a href="%s" style="color:#666">%s</a></p>`,
-			u, html.EscapeString(button), u, u)
+// hostOf is the host of a public URL, as people know the server.
+func hostOf(base string) string {
+	if u, err := url.Parse(base); err == nil && u.Host != "" {
+		return u.Host
 	}
-	return fmt.Sprintf(`<!doctype html><html><body style="margin:0;padding:24px;background:#f6f6f6;`+
-		`font-family:-apple-system,Segoe UI,Helvetica,Arial,sans-serif;color:#111">`+
-		`<div style="max-width:520px;margin:0 auto;background:#fff;border:1px solid #e5e5e5;border-radius:12px;padding:28px">`+
+	return base
+}
+
+// emailLayout fills emailHTML. Lead is HTML; the others are escaped by the caller
+// where they hold user input. ButtonURL may be empty.
+type emailLayout struct {
+	Preview, Title, Lead, Note, ButtonURL, Button, Footer string
+}
+
+// emailHTML is the shared layout of degoploy emails: a complete document with
+// preview text and a footer saying why it was sent. The fallback link is plain
+// text, so it still matches the button if a relay rewrites links for tracking.
+func emailHTML(l emailLayout) string {
+	var cta string
+	if l.ButtonURL != "" {
+		u := html.EscapeString(l.ButtonURL)
+		cta = fmt.Sprintf(`<p style="margin:24px 0"><a href="%s" style="display:inline-block;background:#111111;`+
+			`color:#ffffff;padding:10px 16px;border-radius:6px;text-decoration:none;font-weight:500">%s</a></p>`+
+			`<p style="margin:0 0 16px;color:#555555;font-size:13px;line-height:1.5">If the button does not work, `+
+			`copy this address into your browser:<br><span style="word-break:break-all;color:#111111">%s</span></p>`,
+			u, html.EscapeString(l.Button), u)
+	}
+	return fmt.Sprintf(`<!doctype html><html lang="en"><head><meta charset="utf-8">`+
+		`<meta name="viewport" content="width=device-width,initial-scale=1"><title>%s</title></head>`+
+		`<body style="margin:0;padding:24px;background:#f6f6f6;font-family:-apple-system,Segoe UI,Helvetica,Arial,sans-serif;color:#111111">`+
+		`<div style="display:none;max-height:0;overflow:hidden">%s</div>`+
+		`<div style="max-width:520px;margin:0 auto;background:#ffffff;border:1px solid #e5e5e5;border-radius:12px;padding:28px">`+
 		`<p style="margin:0 0 16px;font-weight:600">degoploy</p><h1 style="font-size:20px;margin:0 0 12px">%s</h1>`+
-		`<p style="font-size:15px;line-height:1.5">%s</p>%s<p style="color:#666;font-size:13px;line-height:1.5">%s</p>`+
-		`</div><p style="text-align:center;color:#999;font-size:12px;margin-top:16px">Sent %s</p></body></html>`,
-		html.EscapeString(title), lead, cta, note, time.Now().UTC().Format("2 Jan 2006 15:04 UTC"))
+		`<p style="font-size:15px;line-height:1.5">%s</p>%s<p style="margin:0;color:#555555;font-size:13px;line-height:1.5">%s</p>`+
+		`</div><p style="max-width:520px;margin:16px auto 0;text-align:center;color:#888888;font-size:12px;line-height:1.5">%s</p>`+
+		`</body></html>`,
+		html.EscapeString(l.Title), html.EscapeString(l.Preview), html.EscapeString(l.Title), l.Lead, cta, l.Note, l.Footer)
 }

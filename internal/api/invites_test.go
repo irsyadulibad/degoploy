@@ -67,6 +67,16 @@ func TestInvites(t *testing.T) {
 		!strings.Contains(strings.ReplaceAll(msgs[1].Data, "=\r\n", ""), "/invite/"+links[0].Token) {
 		t.Fatalf("invitation emails = %+v", msgs)
 	}
+	// The invitation says where it comes from, who sent it and why.
+	if msgs := mailbox.Messages(); len(msgs) == 3 {
+		body := strings.ReplaceAll(msgs[1].Data, "=\r\n", "")
+		for _, want := range []string{"admin (admin@example.com) invited you to degoploy on", "<title>Join degoploy on",
+			"no account is created until the link is used"} {
+			if !strings.Contains(body, want) {
+				t.Errorf("invitation lacks %q:\n%s", want, body)
+			}
+		}
+	}
 	if code := admin.do("POST", "/api/v1/invites", `{"emails":["sinta@example.com"],"role":"viewer"}`, &e); code != 422 {
 		t.Fatalf("re-invite: %d", code)
 	}

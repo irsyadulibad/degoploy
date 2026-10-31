@@ -28,7 +28,7 @@ func TestSend(t *testing.T) {
 	}
 	data := msgs[0].Data
 	for _, want := range []string{`From: "Degoploy" <no-reply@degovan.id>`, "Subject: =?utf-8?q?", "multipart/alternative",
-		"text/html", ".leading dot"} {
+		"text/html", ".leading dot", "Auto-Submitted: auto-generated"} {
 		if !strings.Contains(data, want) {
 			t.Errorf("message lacks %q:\n%s", want, data)
 		}

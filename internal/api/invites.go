@@ -166,7 +166,7 @@ func (a *API) createInvites(w http.ResponseWriter, r *http.Request) {
 		}
 		a.recordInvite(r, ident.User.ID, audit.InviteCreate, inv)
 		out = append(out, InviteLink{Invite: toInvite(inv), Token: token,
-			EmailError: a.sendInvite(r, smtp, inviterName(ident.User), inv, token)})
+			EmailError: a.sendInvite(r, smtp, ident.User, inv, token)})
 	}
 	httpx.JSON(w, http.StatusCreated, out)
 }
@@ -192,7 +192,7 @@ func (a *API) renewInvite(w http.ResponseWriter, r *http.Request) {
 	}
 	a.recordInvite(r, ident.User.ID, audit.InviteRenew, inv)
 	httpx.JSON(w, http.StatusOK, InviteLink{Invite: toInvite(inv), Token: token,
-		EmailError: a.sendInvite(r, smtp, inviterName(ident.User), inv, token)})
+		EmailError: a.sendInvite(r, smtp, ident.User, inv, token)})
 }
 
 func (a *API) revokeInvite(w http.ResponseWriter, r *http.Request) {
